@@ -1,0 +1,37 @@
+module CollateralLock where
+
+template CollateralLock
+  with
+    owner: Party
+    custodian: Party
+    asset: Text
+    amount: Decimal
+    minCollateralAmount: Decimal
+  where
+    signatory owner, custodian
+    ensure amount >= minCollateralAmount
+
+    choice AddCollateral : ContractId CollateralLock
+      with
+        addAmount: Decimal
+      controller owner
+      do
+        create this with amount = amount + addAmount
+
+    choice Withdraw : ContractId CollateralLock
+      with
+        withdrawAmount: Decimal
+      controller owner
+      do
+        assert (amount - withdrawAmount >= minCollateralAmount)
+        create this with amount = amount - withdrawAmount
+
+    choice Release : ()
+      controller custodian
+      do
+        return ()
+
+    choice Liquidate : ()
+      controller custodian
+      do
+        return ()

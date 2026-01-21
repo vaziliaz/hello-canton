@@ -1,0 +1,29 @@
+module Escrow where
+
+template Escrow
+  with
+    sender: Party
+    receiver: Party
+    amount: Decimal
+    isApproved: Bool
+    note: Text
+  where
+    signatory sender
+    observer receiver
+
+    choice Approve : ContractId Escrow
+      controller sender
+      do
+        create this with isApproved = True
+
+    choice Claim : ()
+      controller receiver
+      do
+        assert isApproved
+        return ()
+
+    choice Cancel : ()
+      controller sender
+      do
+        assert (not isApproved)
+        return ()

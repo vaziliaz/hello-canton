@@ -1,0 +1,16 @@
+module SimpleToken where
+
+template SimpleToken
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal
+  where
+    signatory issuer
+    observer owner
+    choice Transfer : ContractId SimpleToken
+      with
+        newOwner : Party
+      controller owner
+      do create this with
+           owner = newOwner
