@@ -9,6 +9,11 @@ function App() {
   const [simpleTokens, setSimpleTokens] = useState([]);
   const [escrows, setEscrows] = useState([]);
   const [collateralLocks, setCollateralLocks] = useState([]);
+  const [showCreateToken, setShowCreateToken] = useState(false);
+  const [createTokenForm, setCreateTokenForm] = useState({
+    owner: '',
+    amount: ''
+  });
 
   useEffect(() => {
     // Check if user is already logged in
@@ -48,12 +53,32 @@ function App() {
     setLoading(true);
     setError(null);
     try {
-      // Fetch all three contract types
-      const [tokensResult, escrowsResult, locksResult] = await Promise.all([
-        damlApi.queryContracts(['SimpleToken:SimpleToken']).catch(() => ({ result: [] })),
-        damlApi.queryContracts(['Escrow:Escrow']).catch(() => ({ result: [] })),
-        damlApi.queryContracts(['CollateralLock:CollateralLock']).catch(() => ({ result: [] })),
-      ]);
+      // Query all contracts - the queryContracts method will handle finding package ID
+      // and constructing proper template IDs, or query all and filter
+      const allContractsResult = await damlApi.queryContracts([]).catch(() => ({ result: [] }));
+      const allContracts = allContractsResult.result || [];
+
+      // Filter contracts by template name (works for both specific queries and all-contracts fallback)
+      const tokensResult = { 
+        result: allContracts.filter(c => {
+          const templateId = c.templateId || '';
+          return templateId.includes('SimpleToken:SimpleToken') || templateId.endsWith(':SimpleToken:SimpleToken');
+        })
+      };
+      
+      const escrowsResult = { 
+        result: allContracts.filter(c => {
+          const templateId = c.templateId || '';
+          return templateId.includes('Escrow:Escrow') || templateId.endsWith(':Escrow:Escrow');
+        })
+      };
+      
+      const locksResult = { 
+        result: allContracts.filter(c => {
+          const templateId = c.templateId || '';
+          return templateId.includes('CollateralLock:CollateralLock') || templateId.endsWith(':CollateralLock:CollateralLock');
+        })
+      };
 
       setSimpleTokens(tokensResult.result || []);
       setEscrows(escrowsResult.result || []);
@@ -127,7 +152,59 @@ function App() {
           >
             {loading ? 'Refreshing...' : '🔄 Refresh Contracts'}
           </button>
+          <button 
+            onClick={() => {
+              localStorage.removeItem('daml_package_id');
+              fetchAllContracts();
+            }}
+            className="clear-cache-button"
+            title="Clear package ID cache and refresh"
+          >
+            🔄 Clear Cache
+          </button>
+          <button 
+            onClick={() => setShowCreateToken(!showCreateToken)}
+            className="create-button"
+          >
+            {showCreateToken ? '✕ Cancel' : '➕ Create Token'}
+          </button>
         </div>
+
+        {showCreateToken && (
+          <CreateTokenForm
+            user={user}
+            partyIdentifier={damlApi.getPartyIdentifier()}
+            onSubmit={async (formData) => {
+              setLoading(true);
+              setError(null);
+              try {
+                await damlApi.createSimpleToken(
+                  formData.issuer,
+                  formData.owner,
+                  formData.amount
+                );
+                setShowCreateToken(false);
+                setCreateTokenForm({ owner: '', amount: '' });
+                await fetchAllContracts();
+              } catch (err) {
+                let errorMsg = err.message;
+                // Provide more helpful error message
+                if (errorMsg.includes('Could not find the correct package ID') || 
+                    errorMsg.includes('DAR file is not uploaded')) {
+                  errorMsg += ' Try running `daml start` in your terminal to upload the DAR file.';
+                }
+                setError(errorMsg);
+                console.error('Failed to create token:', err);
+              } finally {
+                setLoading(false);
+              }
+            }}
+            onCancel={() => {
+              setShowCreateToken(false);
+              setCreateTokenForm({ owner: '', amount: '' });
+            }}
+          />
+        )}
 
         <div className="contracts-grid">
           <ContractSection
@@ -249,6 +326,123 @@ function ContractSection({ title, contracts, renderContract, emptyMessage }) {
         </div>
       )}
     </section>
+  );
+}
+
+function CreateTokenForm({ user, partyIdentifier, onSubmit, onCancel }) {
+  const [formData, setFormData] = useState({
+    owner: '',
+    amount: ''
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [parties, setParties] = useState([]);
+  const [loadingParties, setLoadingParties] = useState(true);
+
+  useEffect(() => {
+    // Fetch available parties for the dropdown
+    const fetchParties = async () => {
+      try {
+        const response = await fetch('/v1/parties', {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('daml_token')}`
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setParties(data.result || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch parties:', err);
+      } finally {
+        setLoadingParties(false);
+      }
+    };
+    fetchParties();
+  }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!formData.owner || !formData.amount) {
+      alert('Please fill in all fields');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      // Use current user's party identifier as issuer
+      await onSubmit({
+        issuer: partyIdentifier,
+        owner: formData.owner,
+        amount: parseFloat(formData.amount)
+      });
+    } catch (err) {
+      console.error('Create token error:', err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="create-token-form">
+      <h3>Create Simple Token</h3>
+      <form onSubmit={handleSubmit}>
+        <div className="form-field">
+          <label>
+            Issuer (You): <span className="field-hint">{partyIdentifier || 'Loading...'}</span>
+          </label>
+        </div>
+        <div className="form-field">
+          <label>
+            Owner Party: *
+            {loadingParties ? (
+              <input
+                type="text"
+                value={formData.owner}
+                onChange={(e) => setFormData({ ...formData, owner: e.target.value })}
+                placeholder="Loading parties..."
+                disabled
+              />
+            ) : (
+              <select
+                value={formData.owner}
+                onChange={(e) => setFormData({ ...formData, owner: e.target.value })}
+                required
+              >
+                <option value="">Select a party...</option>
+                {parties.map((party) => (
+                  <option key={party.identifier} value={party.identifier}>
+                    {party.displayName || party.identifier}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+          <small className="form-hint">Select the party who will own the token</small>
+        </div>
+        <div className="form-field">
+          <label>
+            Amount: *
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={formData.amount}
+              onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+              placeholder="100.00"
+              required
+            />
+          </label>
+        </div>
+        <div className="form-actions">
+          <button type="submit" disabled={submitting} className="submit-button">
+            {submitting ? 'Creating...' : 'Create Token'}
+          </button>
+          <button type="button" onClick={onCancel} className="cancel-button">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
